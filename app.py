@@ -22,7 +22,7 @@ EMBED_MODEL = "gemini-embedding-001"
 CHAT_MODEL = "gemini-2.5-flash"
 CHUNK_SIZE = 800      # characters per chunk
 CHUNK_OVERLAP = 150   # characters shared between neighbouring chunks
-TOP_K = 4             # how many chunks to retrieve per question
+TOP_K = 6             # how many chunks to retrieve per question
 
 
 # ---------- step 1: read the pdf ----------
@@ -92,7 +92,10 @@ def find_relevant_chunks(question_vector, chunk_vectors, chunks, k=TOP_K):
 # ---------- step 6: generation ----------
 def answer_question(client, question, relevant_chunks):
     context = "\n\n---\n\n".join(chunk for chunk, _ in relevant_chunks)
-    prompt = f"""Answer the question using ONLY the context below.
+    prompt = f"""You are a helpful assistant answering questions about a document.
+Answer the question using ONLY the context below.
+Give a complete answer in full sentences: include the relevant titles, names,
+aims or details from the context, not just a label or heading.
 If the answer is not in the context, say "I couldn't find that in the document."
 
 Context:

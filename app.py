@@ -32,7 +32,9 @@ def extract_text(pdf_file):
     for page in reader.pages:
         text = page.extract_text()
         if text:
-            pages.append(text)
+            # some pdfs extract one word per line; this collapses all extra
+            # spaces/newlines into single spaces so chunks hold real content
+            pages.append(" ".join(text.split()))
     return "\n".join(pages)
 
 

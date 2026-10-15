@@ -11,10 +11,12 @@ Flow:
 """
 
 import os
+import time
 import numpy as np
 import streamlit as st
 from pypdf import PdfReader
 from google import genai
+from google.genai import errors
 
 EMBED_MODEL = "gemini-embedding-001"
 CHAT_MODEL = "gemini-2.5-flash"
@@ -49,16 +51,29 @@ def split_into_chunks(text, size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
 
 
 # ---------- step 3 & 4: embeddings ----------
+def embed_batch(client, batch, task_type):
+    # the free tier has a rate limit, so if we get error 429 ("too many requests")
+    # we wait a bit and try again instead of crashing
+    for attempt in range(5):
+        try:
+            return client.models.embed_content(
+                model=EMBED_MODEL,
+                contents=batch,
+                config={"task_type": task_type},
+            )
+        except errors.ClientError as e:
+            if e.code == 429 and attempt < 4:
+                time.sleep(15)
+            else:
+                raise
+
+
 def embed_texts(client, texts, task_type):
     vectors = []
-    batch_size = 50  # api limit per call, so send in batches
+    batch_size = 20  # small batches so we don't hit the free-tier limit too fast
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
-        result = client.models.embed_content(
-            model=EMBED_MODEL,
-            contents=batch,
-            config={"task_type": task_type},
-        )
+        result = embed_batch(client, batch, task_type)
         for item in result.embeddings:
             vectors.append(item.values)
     return np.array(vectors)
@@ -116,8 +131,14 @@ if uploaded:
                 st.error("Couldn't extract any text. Is this a scanned image PDF?")
                 st.stop()
             chunks = split_into_chunks(text)
+            try:
+                vectors = embed_texts(client, chunks, "RETRIEVAL_DOCUMENT")
+            except errors.APIError as e:
+                # show the real reason instead of streamlit's redacted error
+                st.error(f"Gemini API error {e.code}: {e.message}")
+                st.stop()
             st.session_state.chunks = chunks
-            st.session_state.vectors = embed_texts(client, chunks, "RETRIEVAL_DOCUMENT")
+            st.session_state.vectors = vectors
             st.session_state.file_name = uploaded.name
             st.session_state.history = []
         st.success(f"Indexed {len(st.session_state.chunks)} chunks from {uploaded.name}")
@@ -130,9 +151,13 @@ if uploaded:
     if question:
         st.chat_message("user").write(question)
         with st.spinner("Thinking..."):
-            q_vector = embed_texts(client, [question], "RETRIEVAL_QUERY")[0]
-            relevant = find_relevant_chunks(q_vector, st.session_state.vectors, st.session_state.chunks)
-            answer = answer_question(client, question, relevant)
+            try:
+                q_vector = embed_texts(client, [question], "RETRIEVAL_QUERY")[0]
+                relevant = find_relevant_chunks(q_vector, st.session_state.vectors, st.session_state.chunks)
+                answer = answer_question(client, question, relevant)
+            except errors.APIError as e:
+                st.error(f"Gemini API error {e.code}: {e.message}")
+                st.stop()
         st.chat_message("assistant").write(answer)
         with st.expander("Retrieved chunks (the 'R' in RAG)"):
             for chunk, score in relevant:
